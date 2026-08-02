@@ -2,8 +2,26 @@
 
 A connector between ArangoDB and pandas DataFrames.
 
-The package is currently a scaffold. The public read and write APIs will be
-added incrementally.
+## Reading AQL results
+
+`read_aql` executes a query and eagerly materializes its cursor as one
+DataFrame:
+
+```python
+from pandas_arangodb import read_aql
+
+frame = read_aql(
+    database,
+    "FOR document IN users FILTER document.active RETURN document",
+    columns=["_key", "name", "active"],
+    index="_key",
+)
+```
+
+Missing attributes become NA values. Nested objects and arrays remain values
+in object columns, and ArangoDB system attributes remain strings. An empty AQL
+result has no recoverable schema: it produces a DataFrame with the names passed
+through `columns`, or no columns when `columns` is omitted.
 
 ## Compatibility
 
@@ -35,4 +53,17 @@ Run the static checks with:
 ```console
 python -m ruff check .
 python -m mypy
+```
+
+Install the pre-commit hooks with:
+
+```console
+python -m pre_commit install
+```
+
+Pre-commit runs the pinned Ruff and mypy versions in managed environments. To
+run the hooks against the entire repository:
+
+```console
+python -m pre_commit run --all-files
 ```
