@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pandas as pd
 import pytest
 from arango.database import StandardDatabase
 
@@ -22,11 +21,11 @@ def test_trivial_round_trip(arango_database: StandardDatabase) -> None:
         ]
     )
 
-    cursor = arango_database.aql.execute(
+    frame = pandas_arangodb.read_aql(
+        arango_database,
         "FOR document IN round_trip SORT document._key "
-        "RETURN {key: document._key, value: document.value}"
+        "RETURN {key: document._key, value: document.value}",
     )
-    frame = pd.DataFrame.from_records(cursor)
 
     assert frame.to_dict(orient="records") == [
         {"key": "one", "value": 1},
