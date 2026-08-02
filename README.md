@@ -5,7 +5,7 @@ A connector between ArangoDB and pandas DataFrames.
 ## Reading AQL results
 
 `read_aql` executes a query and eagerly materializes its cursor as one
-DataFrame:
+DataFrame when `chunksize` is omitted:
 
 ```python
 from pandas_arangodb import read_aql
@@ -22,6 +22,30 @@ Missing attributes become NA values. Nested objects and arrays remain values
 in object columns, and ArangoDB system attributes remain strings. An empty AQL
 result has no recoverable schema: it produces a DataFrame with the names passed
 through `columns`, or no columns when `columns` is omitted.
+
+For large results, pass `chunksize` or call `iter_aql` directly:
+
+```python
+from pandas_arangodb import iter_aql
+
+chunks = iter_aql(
+    database,
+    "FOR document IN users RETURN document",
+    chunksize=10_000,
+)
+try:
+    for chunk in chunks:
+        process(chunk)
+finally:
+    chunks.close()
+```
+
+Chunked reads use streaming AQL cursors and default the driver's server-side
+`batch_size` to `chunksize`. Set `query_options={"batch_size": ...}` to tune
+the server batch separately. Peak client memory is proportional to the larger
+of `chunksize` and `batch_size`, because the driver deserializes a complete
+server batch. Close the iterator when stopping early so its server cursor is
+released immediately. An empty chunked result yields one empty DataFrame.
 
 ## Compatibility
 
