@@ -1,0 +1,1 @@
+"""Synchronous DataFrame write operations."""
