@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pandas-arangodb"
+version = "0.1.0"
+description = "A connector between ArangoDB and pandas DataFrames"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    {name= "Alexandru Petenchea", email = "alexandru.petenchea@arangodb.com" },
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pandas>=2.2",
+    "python-arango>=8.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[project.urls]
+Repository = "https://github.com/apetenchea/pandas-arango"
+
+[tool.setuptools.packages.find]
+include = ["pandas_arangodb*"]
+
+[tool.setuptools.package-data]
+pandas_arangodb = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "integration: requires a live ArangoDB server",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.mypy]
+files = ["pandas_arangodb"]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true

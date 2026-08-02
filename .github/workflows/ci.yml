@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum
+            python-version: "3.11"
+            dependencies: '"pandas==2.2.0" "python-arango==8.0.0"'
+          - name: latest
+            python-version: "3.14"
+            dependencies: 'pandas python-arango'
+
+    name: ${{ matrix.name }} dependencies
+    services:
+      arangodb:
+        image: arangodb/arangodb:3.12
+        env:
+          ARANGO_ROOT_PASSWORD: passwd
+        ports:
+          - 8529:8529
+        options: >-
+          --health-cmd "arangosh --server.endpoint tcp://127.0.0.1:8529
+          --server.username root --server.password passwd
+          --javascript.execute-string 'db._version()'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test tools
+        run: >-
+          python -m pip install -e ".[dev]"
+          ${{ matrix.dependencies }}
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Type check
+        run: python -m mypy
+
+      - name: Test
+        env:
+          PANDAS_ARANGODB_REQUIRE_SERVER: "1"
+          PANDAS_ARANGODB_TEST_PASSWORD: passwd
+        run: python -m pytest
