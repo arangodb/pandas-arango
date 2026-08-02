@@ -54,3 +54,16 @@ Run the static checks with:
 python -m ruff check .
 python -m mypy
 ```
+
+Install the pre-commit hooks with:
+
+```console
+python -m pre_commit install
+```
+
+Pre-commit runs the pinned Ruff and mypy versions in managed environments. To
+run the hooks against the entire repository:
+
+```console
+python -m pre_commit run --all-files
+```

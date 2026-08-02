@@ -34,6 +34,7 @@ test = [
 ]
 dev = [
     "mypy>=1.10",
+    "pre-commit>=4.0",
     "pytest>=8.0",
     "ruff>=0.9",
 ]
@@ -66,3 +67,7 @@ files = ["pandas_arangodb"]
 python_version = "3.11"
 strict = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["arango", "arango.*", "pandas", "pandas.*"]
+ignore_missing_imports = true

@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-import pandas as pd  # type: ignore[import-untyped]
-from arango.cursor import Cursor  # type: ignore[import-not-found]
-from arango.database import StandardDatabase  # type: ignore[import-not-found]
+import pandas as pd
+from arango.cursor import Cursor
+from arango.database import StandardDatabase
 
 
 def read_aql(
