@@ -121,7 +121,6 @@ def write_collection(
             target.insert_many(
                 documents,
                 overwrite_mode="conflict",
-                raise_on_document_error=False,
             ),
         )
         if len(batch_result) != len(documents):

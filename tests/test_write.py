@@ -38,12 +38,10 @@ def test_write_collection_batches_insert_requests() -> None:
         call(
             [{"value": 10}, {"value": 20}],
             overwrite_mode="conflict",
-            raise_on_document_error=False,
         ),
         call(
             [{"value": 30}],
             overwrite_mode="conflict",
-            raise_on_document_error=False,
         ),
     ]
 
@@ -87,7 +85,6 @@ def test_write_collection_maps_a_named_key_column() -> None:
             {"name": "Bob", "_key": "user-2"},
         ],
         overwrite_mode="conflict",
-        raise_on_document_error=False,
     )
 
 
@@ -123,7 +120,6 @@ def test_write_collection_accepts_explicit_range_index_key() -> None:
     collection.insert_many.assert_called_once_with(
         [{"value": 10, "_key": "0"}, {"value": 20, "_key": "1"}],
         overwrite_mode="conflict",
-        raise_on_document_error=False,
     )
 
 
