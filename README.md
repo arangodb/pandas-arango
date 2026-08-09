@@ -84,9 +84,45 @@ result = write_collection(
 ```
 
 A RangeIndex is not used as `_key` through an implicit index name. Setting
-`index_label="_key"` is an explicit opt-in. Task 16.4 supports insert mode
-only; update, replace, upsert, and configurable null/datetime conversion are
-deferred to later tasks.
+`index_label="_key"` is an explicit opt-in.
+
+Write conversion is configured per call:
+
+```python
+result = write_collection(
+    frame,
+    database,
+    "measurements",
+    null_policy="omit",
+    datetime_format="unix_ms",
+    converters={"price": str, "uuid": str},
+)
+```
+
+`null_policy="null"` converts `None`, `NaN`, `pandas.NA`, and `NaT` column
+values to JSON null. `null_policy="omit"` leaves the corresponding document
+attribute out. Missing values inside nested lists or objects become JSON null;
+the omit policy applies to DataFrame columns.
+
+Timezone-aware timestamps use ISO 8601 strings by default. Pass
+`datetime_format="unix_ms"` for Unix milliseconds or a callable for a custom
+JSON-safe representation. Timezone-naive timestamps are rejected; the
+connector never assumes UTC. Per-column converters run on non-missing values
+before built-in datetime conversion and JSON validation. Values such as
+`Decimal` and `UUID` therefore require a converter. Unsupported values produce
+an error naming the source column, dtype, and row position.
+
+Nullable pandas integers and booleans remain Python integer and boolean values
+instead of being coerced through floats. Some JSON/VelocyPack client stacks
+cannot preserve integer precision beyond 2^53, so applications using larger
+integers should choose an explicit string converter.
+
+Insert is currently the only write mode. For the future update mode,
+`null_policy="omit"` will leave an existing attribute unchanged because it is
+not sent. With `null_policy="null"`, the attribute is sent as null and the
+update operation's `keep_none` setting will determine whether ArangoDB stores
+the null or removes the attribute. Update, replace, and upsert are deferred to
+task 16.6.
 
 ## Compatibility
 
