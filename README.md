@@ -47,6 +47,47 @@ of `chunksize` and `batch_size`, because the driver deserializes a complete
 server batch. Close the iterator when stopping early so its server cursor is
 released immediately. An empty chunked result yields one empty DataFrame.
 
+## Writing collections
+
+`write_collection` inserts DataFrame rows with explicit bulk batching:
+
+```python
+from pandas_arangodb import write_collection
+
+result = write_collection(
+    frame,
+    database,
+    "users",
+    key_column="customer_id",
+    batch_size=1_000,
+)
+```
+
+The key column is renamed to `_key`. Key values are explicitly converted to
+strings and validated before any documents are written. If the default `_key`
+column is absent, ArangoDB generates keys. Duplicate keys and other
+per-document failures are available through `result.errors`; each error carries
+the original DataFrame row position and index label. Request-level errors, such
+as a missing collection, are raised by the driver.
+
+Set `create_collection=True` to create a missing collection. DataFrame indexes
+are excluded by default. To include one, opt in explicitly:
+
+```python
+result = write_collection(
+    frame,
+    database,
+    "users",
+    include_index=True,
+    index_label="_key",
+)
+```
+
+A RangeIndex is not used as `_key` through an implicit index name. Setting
+`index_label="_key"` is an explicit opt-in. Task 16.4 supports insert mode
+only; update, replace, upsert, and configurable null/datetime conversion are
+deferred to later tasks.
+
 ## Compatibility
 
 pandas-arangodb supports Python 3.11 through 3.14, pandas 2.2 or newer, and

@@ -69,5 +69,5 @@ strict = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["arango", "arango.*", "pandas", "pandas.*"]
+module = ["arango.*", "pandas"]
 ignore_missing_imports = true
