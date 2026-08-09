@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, cast
 
 import pandas as pd
@@ -13,6 +16,8 @@ from arango.exceptions import ArangoServerError
 
 _KEY_PATTERN = re.compile(r"[A-Za-z0-9_\-:.@()+,=;$!*'%]+")
 _MAX_KEY_BYTES = 254
+
+DatetimeFormat = Literal["iso", "unix_ms"] | Callable[[datetime], Any]
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,9 @@ def write_collection(
     index_label: str | None = None,
     batch_size: int = 1_000,
     create_collection: bool = False,
+    null_policy: Literal["null", "omit"] = "null",
+    datetime_format: DatetimeFormat = "iso",
+    converters: Mapping[str, Callable[[Any], Any]] | None = None,
 ) -> WriteResult:
     """Insert DataFrame rows into an ArangoDB collection in batches.
 
@@ -73,6 +81,11 @@ def write_collection(
 
     Request-level driver errors, such as a missing collection, are raised.
     Per-document insertion errors are returned in :class:`WriteResult`.
+
+    Missing column values become JSON null with ``null_policy="null"`` or
+    are omitted with ``null_policy="omit"``. Timezone-aware timestamps are
+    encoded as ISO 8601 strings or Unix milliseconds; timezone-naive values
+    are rejected. Column converters run before the built-in conversion.
     """
     if mode != "insert":
         raise ValueError("mode must be 'insert'")
@@ -84,6 +97,10 @@ def write_collection(
         raise ValueError("index_label requires include_index=True")
     if include_index and isinstance(frame.index, pd.MultiIndex):
         raise ValueError("include_index does not support a MultiIndex")
+    if null_policy not in ("null", "omit"):
+        raise ValueError("null_policy must be 'null' or 'omit'")
+    if not callable(datetime_format) and datetime_format not in ("iso", "unix_ms"):
+        raise ValueError("datetime_format must be 'iso', 'unix_ms', or callable")
 
     resolved_index_label = _resolve_index_label(frame, include_index, index_label)
     if resolved_index_label is not None and resolved_index_label in frame.columns:
@@ -91,10 +108,18 @@ def write_collection(
             f"index label {resolved_index_label!r} conflicts with a DataFrame column"
         )
 
+    converter_map = dict(converters or {})
+    column_dtypes = {column: str(frame[column].dtype) for column in frame.columns}
+    if resolved_index_label is not None:
+        column_dtypes[resolved_index_label] = str(frame.index.dtype)
+    _validate_converters(converter_map, column_dtypes)
+
     key_values = _prepare_key_values(
         frame,
         key_column=key_column,
         index_label=resolved_index_label,
+        converters=converter_map,
+        column_dtypes=column_dtypes,
     )
 
     target = _get_collection(db, collection, create_collection=create_collection)
@@ -104,17 +129,28 @@ def write_collection(
     for start in range(0, len(frame), batch_size):
         stop = min(start + batch_size, len(frame))
         batch = frame.iloc[start:stop]
-        documents = batch.to_dict(orient="records")
+        raw_documents = batch.to_dict(orient="records")
         index_values = batch.index.tolist()
+        documents: list[dict[str, Any]] = []
 
-        for offset, document in enumerate(documents):
+        for offset, raw_document in enumerate(raw_documents):
             position = start + offset
             if resolved_index_label is not None:
-                document[resolved_index_label] = index_values[offset]
+                raw_document[resolved_index_label] = index_values[offset]
             if key_values is not None and key_column is not None:
-                if key_column != "_key":
-                    document.pop(key_column, None)
+                raw_document.pop(key_column, None)
+
+            document = _convert_document(
+                raw_document,
+                row_position=position,
+                null_policy=null_policy,
+                datetime_format=datetime_format,
+                converters=converter_map,
+                column_dtypes=column_dtypes,
+            )
+            if key_values is not None:
                 document["_key"] = key_values[position]
+            documents.append(document)
 
         batch_result = cast(
             list[dict[str, Any] | ArangoServerError],
@@ -172,6 +208,8 @@ def _prepare_key_values(
     *,
     key_column: str | None,
     index_label: str | None,
+    converters: Mapping[str, Callable[[Any], Any]],
+    column_dtypes: Mapping[Any, str],
 ) -> list[str] | None:
     if key_column is None:
         if "_key" in frame.columns:
@@ -192,10 +230,160 @@ def _prepare_key_values(
             f"cannot map key column {key_column!r}: DataFrame already has '_key'"
         )
 
-    return [
-        _normalize_key(value, row_position=position, key_column=key_column)
-        for position, value in enumerate(values)
-    ]
+    converter = converters.get(key_column)
+    normalized: list[str] = []
+    for position, value in enumerate(values):
+        if converter is not None and not _is_missing(value):
+            value = _apply_converter(
+                value,
+                converter=converter,
+                column=key_column,
+                dtype=column_dtypes[key_column],
+                row_position=position,
+            )
+        normalized.append(
+            _normalize_key(value, row_position=position, key_column=key_column)
+        )
+    return normalized
+
+
+def _validate_converters(
+    converters: Mapping[str, Callable[[Any], Any]],
+    column_dtypes: Mapping[Any, str],
+) -> None:
+    for column, converter in converters.items():
+        if column not in column_dtypes:
+            raise ValueError(f"converter column {column!r} does not exist")
+        if not callable(converter):
+            raise TypeError(f"converter for column {column!r} must be callable")
+
+
+def _convert_document(
+    document: Mapping[Any, Any],
+    *,
+    row_position: int,
+    null_policy: Literal["null", "omit"],
+    datetime_format: DatetimeFormat,
+    converters: Mapping[str, Callable[[Any], Any]],
+    column_dtypes: Mapping[Any, str],
+) -> dict[str, Any]:
+    converted: dict[str, Any] = {}
+    for column, value in document.items():
+        if not isinstance(column, str):
+            raise TypeError(
+                f"DataFrame column {column!r} is not a valid JSON object key"
+            )
+
+        dtype = column_dtypes[column]
+        if _is_missing(value):
+            if null_policy == "null":
+                converted[column] = None
+            continue
+
+        converter = converters.get(column)
+        if converter is not None:
+            value = _apply_converter(
+                value,
+                converter=converter,
+                column=column,
+                dtype=dtype,
+                row_position=row_position,
+            )
+            if _is_missing(value):
+                if null_policy == "null":
+                    converted[column] = None
+                continue
+
+        try:
+            converted[column] = _convert_json_value(
+                value,
+                datetime_format=datetime_format,
+            )
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"column {column!r} (dtype {dtype}) has an invalid value "
+                f"at row {row_position}: {error}"
+            ) from error
+    return converted
+
+
+def _apply_converter(
+    value: Any,
+    *,
+    converter: Callable[[Any], Any],
+    column: str,
+    dtype: str,
+    row_position: int,
+) -> Any:
+    try:
+        return converter(value)
+    except Exception as error:
+        raise ValueError(
+            f"converter for column {column!r} (dtype {dtype}) failed "
+            f"at row {row_position}: {error}"
+        ) from error
+
+
+def _convert_json_value(
+    value: Any,
+    *,
+    datetime_format: DatetimeFormat,
+    allow_datetime: bool = True,
+) -> Any:
+    if _is_missing(value):
+        return None
+    if isinstance(value, datetime):
+        if not allow_datetime:
+            raise TypeError("datetime converter returned another datetime value")
+        converted = _convert_datetime(value, datetime_format=datetime_format)
+        return _convert_json_value(
+            converted,
+            datetime_format=datetime_format,
+            allow_datetime=False,
+        )
+    if isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("non-finite floats are not valid JSON numbers")
+        return value
+    if isinstance(value, list | tuple):
+        return [
+            _convert_json_value(item, datetime_format=datetime_format)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        converted_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"nested object key {key!r} is not a string")
+            converted_dict[key] = _convert_json_value(
+                item,
+                datetime_format=datetime_format,
+            )
+        return converted_dict
+    raise TypeError(f"{type(value).__name__} is not JSON-serializable")
+
+
+def _convert_datetime(value: datetime, *, datetime_format: DatetimeFormat) -> Any:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timezone-naive timestamps are not supported")
+    if callable(datetime_format):
+        return datetime_format(value)
+    if datetime_format == "iso":
+        return value.isoformat(timespec="microseconds")
+    return pd.Timestamp(value).value // 1_000_000
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None or value is pd.NA or value is pd.NaT:
+        return True
+    if not pd.api.types.is_scalar(value):
+        return False
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _normalize_key(value: Any, *, row_position: int, key_column: str) -> str:

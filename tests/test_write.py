@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from typing import cast
+from decimal import Decimal
+from typing import Literal, cast
 from unittest.mock import Mock, call
+from uuid import UUID
 
 import pandas as pd
 import pytest
@@ -121,6 +123,236 @@ def test_write_collection_accepts_explicit_range_index_key() -> None:
         [{"value": 10, "_key": "0"}, {"value": 20, "_key": "1"}],
         overwrite_mode="conflict",
     )
+
+
+@pytest.mark.parametrize(
+    ("null_policy", "expected"),
+    [
+        (
+            "null",
+            {
+                "_key": "one",
+                "none": None,
+                "nan": None,
+                "na": None,
+                "nat": None,
+            },
+        ),
+        ("omit", {"_key": "one"}),
+    ],
+)
+def test_write_collection_applies_null_policy(
+    null_policy: str,
+    expected: dict[str, object],
+) -> None:
+    """Convert every pandas missing scalar to null or omit its attribute."""
+    database = Mock()
+    collection = database.collection.return_value
+    collection.insert_many.return_value = [{"_key": "one"}]
+    frame = pd.DataFrame(
+        {
+            "_key": ["one"],
+            "none": pd.Series([None], dtype="object"),
+            "nan": pd.Series([float("nan")], dtype="object"),
+            "na": pd.Series([pd.NA], dtype="object"),
+            "nat": pd.Series([pd.NaT], dtype="object"),
+        }
+    )
+
+    write_collection(
+        frame,
+        cast(StandardDatabase, database),
+        "items",
+        null_policy=cast(Literal["null", "omit"], null_policy),
+    )
+
+    collection.insert_many.assert_called_once_with(
+        [expected],
+        overwrite_mode="conflict",
+    )
+
+
+@pytest.mark.parametrize(
+    ("datetime_format", "expected"),
+    [
+        ("iso", "2026-07-15T10:30:00.000000+00:00"),
+        ("unix_ms", 1_784_111_400_000),
+    ],
+)
+def test_write_collection_converts_timezone_aware_timestamps(
+    datetime_format: str,
+    expected: str | int,
+) -> None:
+    """Encode aware timestamps using either documented built-in format."""
+    database = Mock()
+    collection = database.collection.return_value
+    collection.insert_many.return_value = [{"_key": "one"}]
+    frame = pd.DataFrame(
+        {
+            "_key": ["one"],
+            "created_at": [pd.Timestamp("2026-07-15T10:30:00+00:00")],
+        }
+    )
+
+    write_collection(
+        frame,
+        cast(StandardDatabase, database),
+        "items",
+        datetime_format=cast(Literal["iso", "unix_ms"], datetime_format),
+    )
+
+    collection.insert_many.assert_called_once_with(
+        [{"created_at": expected, "_key": "one"}],
+        overwrite_mode="conflict",
+    )
+
+
+def test_write_collection_uses_callable_datetime_format() -> None:
+    """Allow callers to define the serialized representation of datetimes."""
+    database = Mock()
+    collection = database.collection.return_value
+    collection.insert_many.return_value = [{"_key": "one"}]
+
+    write_collection(
+        pd.DataFrame(
+            {
+                "_key": ["one"],
+                "created_at": [pd.Timestamp("2026-07-15T10:30:00+00:00")],
+            }
+        ),
+        cast(StandardDatabase, database),
+        "items",
+        datetime_format=lambda value: value.strftime("%Y%m%d"),
+    )
+
+    collection.insert_many.assert_called_once_with(
+        [{"created_at": "20260715", "_key": "one"}],
+        overwrite_mode="conflict",
+    )
+
+
+def test_write_collection_rejects_timezone_naive_timestamps() -> None:
+    """Reject naive timestamps instead of silently assuming a timezone."""
+    database = Mock()
+
+    with pytest.raises(TypeError, match="timezone-naive"):
+        write_collection(
+            pd.DataFrame(
+                {
+                    "_key": ["one"],
+                    "created_at": [pd.Timestamp("2026-07-15T10:30:00")],
+                }
+            ),
+            cast(StandardDatabase, database),
+            "items",
+        )
+
+    database.collection.return_value.insert_many.assert_not_called()
+
+
+def test_write_collection_preserves_nullable_scalars() -> None:
+    """Keep nullable integers and booleans as JSON scalars without floats."""
+    database = Mock()
+    collection = database.collection.return_value
+    collection.insert_many.return_value = [{"_key": "one"}, {"_key": "two"}]
+    frame = pd.DataFrame(
+        {
+            "_key": ["one", "two"],
+            "count": pd.Series([7, None], dtype="Int64"),
+            "active": pd.Series([True, None], dtype="boolean"),
+        }
+    )
+
+    write_collection(frame, cast(StandardDatabase, database), "items")
+
+    documents = collection.insert_many.call_args.args[0]
+    assert documents == [
+        {"count": 7, "active": True, "_key": "one"},
+        {"count": None, "active": None, "_key": "two"},
+    ]
+    assert type(documents[0]["count"]) is int
+    assert type(documents[0]["active"]) is bool
+
+
+@pytest.mark.parametrize("value", [Decimal("1.25"), UUID(int=1)])
+def test_write_collection_rejects_non_json_values(value: object) -> None:
+    """Identify the source column and dtype for unsupported Python values."""
+    database = Mock()
+
+    with pytest.raises(TypeError, match=r"column 'value' \(dtype object\)"):
+        write_collection(
+            pd.DataFrame({"_key": ["one"], "value": [value]}),
+            cast(StandardDatabase, database),
+            "items",
+        )
+
+    database.collection.return_value.insert_many.assert_not_called()
+
+
+def test_write_collection_applies_column_converters() -> None:
+    """Use per-column hooks to make Decimal and UUID values JSON-safe."""
+    database = Mock()
+    collection = database.collection.return_value
+    collection.insert_many.return_value = [{"_key": "one"}]
+    identifier = UUID(int=1)
+
+    write_collection(
+        pd.DataFrame(
+            {
+                "_key": ["one"],
+                "price": [Decimal("1.25")],
+                "identifier": [identifier],
+            }
+        ),
+        cast(StandardDatabase, database),
+        "items",
+        converters={"price": str, "identifier": str},
+    )
+
+    collection.insert_many.assert_called_once_with(
+        [
+            {
+                "price": "1.25",
+                "identifier": str(identifier),
+                "_key": "one",
+            }
+        ],
+        overwrite_mode="conflict",
+    )
+
+
+@pytest.mark.integration
+def test_write_collection_round_trips_converted_values(
+    arango_database: StandardDatabase,
+) -> None:
+    """Confirm converted scalars pass driver serialization and reach ArangoDB."""
+    collection = arango_database.create_collection("write_converted_values")
+    frame = pd.DataFrame(
+        {
+            "_key": ["one"],
+            "count": pd.Series([7], dtype="Int64"),
+            "active": pd.Series([True], dtype="boolean"),
+            "missing": pd.Series([pd.NA], dtype="object"),
+            "created_at": [pd.Timestamp("2026-07-15T10:30:00+00:00")],
+            "price": [Decimal("1.25")],
+        }
+    )
+
+    result = write_collection(
+        frame,
+        arango_database,
+        collection.name,
+        converters={"price": str},
+    )
+
+    assert result.inserted_count == 1
+    document = collection.get("one")
+    assert document is not None
+    assert document["count"] == 7
+    assert document["active"] is True
+    assert document["missing"] is None
+    assert document["created_at"] == "2026-07-15T10:30:00.000000+00:00"
+    assert document["price"] == "1.25"
 
 
 @pytest.mark.parametrize("key", [None, "", "contains space", "path/segment"])
