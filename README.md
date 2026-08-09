@@ -23,6 +23,47 @@ in object columns, and ArangoDB system attributes remain strings. An empty AQL
 result has no recoverable schema: it produces a DataFrame with the names passed
 through `columns`, or no columns when `columns` is omitted.
 
+Prefer shaping nested data in AQL instead of fetching complete documents:
+
+```python
+frame = read_aql(
+    database,
+    """
+    FOR document IN users
+        RETURN {
+            user_key: document._key,
+            city: document.address.city
+        }
+    """,
+)
+```
+
+This reduces network traffic and makes the returned schema explicit. When AQL
+projection is not practical, opt in to client-side flattening:
+
+```python
+frame = read_aql(
+    database,
+    "FOR document IN users RETURN document",
+    flatten=True,
+    flatten_separator=".",
+)
+```
+
+A nested value such as `{"address": {"city": "Berlin"}}` becomes an
+`address.city` column. Inconsistent document shapes produce the union of
+flattened columns with missing values within each returned DataFrame. Chunked
+reads can therefore have different columns per chunk unless `columns` is
+provided. Arrays, including arrays of objects, remain values in a single
+column and are not exploded into rows.
+
+Flattening delegates to `pandas.json_normalize`. Separators in literal keys
+are not escaped or reported, so `{"address.city": "literal"}` conflicts with
+`{"address": {"city": "nested"}}`; pandas keeps the nested value in this
+direct collision. Choose a different `flatten_separator` or use AQL projection
+when document keys can contain the separator. The default `flatten=False`
+preserves nested objects exactly as returned by ArangoDB.
+
 For large results, pass `chunksize` or call `iter_aql` directly:
 
 ```python
