@@ -49,7 +49,7 @@ released immediately. An empty chunked result yields one empty DataFrame.
 
 ## Writing collections
 
-`write_collection` inserts DataFrame rows with explicit bulk batching:
+`write_collection` writes DataFrame rows with explicit bulk batching:
 
 ```python
 from pandas_arangodb import write_collection
@@ -67,8 +67,9 @@ The key column is renamed to `_key`. Key values are explicitly converted to
 strings and validated before any documents are written. If the default `_key`
 column is absent, ArangoDB generates keys. Duplicate keys and other
 per-document failures are available through `result.errors`; each error carries
-the original DataFrame row position and index label. Request-level errors, such
-as a missing collection, are raised by the driver.
+the original DataFrame row position and index label. `result.written_count`
+reports successful rows. Request-level errors, such as a missing collection,
+are raised by the driver.
 
 Set `create_collection=True` to create a missing collection. DataFrame indexes
 are excluded by default. To include one, opt in explicitly:
@@ -117,12 +118,31 @@ instead of being coerced through floats. Some JSON/VelocyPack client stacks
 cannot preserve integer precision beyond 2^53, so applications using larger
 integers should choose an explicit string converter.
 
-Insert is currently the only write mode. For the future update mode,
-`null_policy="omit"` will leave an existing attribute unchanged because it is
-not sent. With `null_policy="null"`, the attribute is sent as null and the
-update operation's `keep_none` setting will determine whether ArangoDB stores
-the null or removes the attribute. Update, replace, and upsert are deferred to
-task 16.6.
+Four write modes are available:
+
+| Mode | Existing `_key` | Absent `_key` in collection | Attributes |
+| --- | --- | --- | --- |
+| `insert` | Per-row conflict error | Insert | All supplied attributes |
+| `update` | Update | Per-row not-found error | Supplied attributes only |
+| `replace` | Replace | Per-row not-found error | Complete replacement |
+| `upsert` | Update | Insert | Supplied attributes only |
+
+`update`, `replace`, and `upsert` require an explicit document key column.
+Insert may omit `_key`, in which case ArangoDB generates one. Update and upsert
+merge nested objects. Replace removes old user attributes that are absent from
+the DataFrame row.
+
+For update and the update branch of upsert, `null_policy="omit"` leaves an
+existing attribute unchanged because the attribute is not sent. With
+`null_policy="null"`, the attribute is sent as null: `keep_none=True` stores
+the null, while `keep_none=False` removes the attribute. For a newly inserted
+document, null remains null. Replace stores supplied nulls normally because
+`keep_none` applies only to update operations.
+
+Write modes never drop, recreate, or truncate a collection. Collection
+creation remains an independent `create_collection=True` opt-in, preserving
+indexes, graph definitions, and collection configuration on existing
+collections.
 
 ## Compatibility
 

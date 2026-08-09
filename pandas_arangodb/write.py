@@ -18,6 +18,7 @@ _KEY_PATTERN = re.compile(r"[A-Za-z0-9_\-:.@()+,=;$!*'%]+")
 _MAX_KEY_BYTES = 254
 
 DatetimeFormat = Literal["iso", "unix_ms"] | Callable[[datetime], Any]
+WriteMode = Literal["insert", "update", "replace", "upsert"]
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,11 @@ class WriteResult:
     errors: tuple[WriteError, ...] = ()
 
     @property
+    def written_count(self) -> int:
+        """Return the number of documents successfully written."""
+        return self.inserted_count
+
+    @property
     def error_count(self) -> int:
         """Return the number of documents that failed."""
         return len(self.errors)
@@ -44,11 +50,11 @@ class WriteResult:
     @property
     def attempted_count(self) -> int:
         """Return the total number of attempted documents."""
-        return self.inserted_count + self.error_count
+        return self.written_count + self.error_count
 
     @property
     def ok(self) -> bool:
-        """Return whether every document was inserted."""
+        """Return whether every document was written."""
         return not self.errors
 
 
@@ -57,17 +63,23 @@ def write_collection(
     db: StandardDatabase,
     collection: str,
     *,
-    mode: Literal["insert"] = "insert",
+    mode: WriteMode = "insert",
     key_column: str | None = "_key",
     include_index: bool = False,
     index_label: str | None = None,
     batch_size: int = 1_000,
     create_collection: bool = False,
     null_policy: Literal["null", "omit"] = "null",
+    keep_none: bool = True,
     datetime_format: DatetimeFormat = "iso",
     converters: Mapping[str, Callable[[Any], Any]] | None = None,
 ) -> WriteResult:
-    """Insert DataFrame rows into an ArangoDB collection in batches.
+    """Write DataFrame rows into an ArangoDB collection in batches.
+
+    ``insert`` creates new documents and reports key conflicts. ``update``
+    modifies existing documents, ``replace`` replaces their complete user
+    attribute set, and ``upsert`` updates existing keys or inserts missing
+    keys. Modes other than ``insert`` require an explicit key source.
 
     ``key_column`` identifies a column to rename to ``_key``. If the default
     ``_key`` column is absent, ArangoDB generates document keys. Pass
@@ -80,15 +92,20 @@ def write_collection(
     explicitly set to ``_key``.
 
     Request-level driver errors, such as a missing collection, are raised.
-    Per-document insertion errors are returned in :class:`WriteResult`.
+    Per-document write errors are returned in :class:`WriteResult`.
 
     Missing column values become JSON null with ``null_policy="null"`` or
     are omitted with ``null_policy="omit"``. Timezone-aware timestamps are
     encoded as ISO 8601 strings or Unix milliseconds; timezone-naive values
     are rejected. Column converters run before the built-in conversion.
+
+    For ``update`` and the update branch of ``upsert``, omitted attributes
+    remain unchanged. Sent nulls are stored when ``keep_none=True`` and remove
+    existing attributes when ``keep_none=False``. ``keep_none`` does not
+    affect insert or replace operations.
     """
-    if mode != "insert":
-        raise ValueError("mode must be 'insert'")
+    if mode not in ("insert", "update", "replace", "upsert"):
+        raise ValueError("mode must be 'insert', 'update', 'replace', or 'upsert'")
     if isinstance(batch_size, bool) or not isinstance(batch_size, int):
         raise TypeError("batch_size must be an integer")
     if batch_size <= 0:
@@ -99,6 +116,8 @@ def write_collection(
         raise ValueError("include_index does not support a MultiIndex")
     if null_policy not in ("null", "omit"):
         raise ValueError("null_policy must be 'null' or 'omit'")
+    if not isinstance(keep_none, bool):
+        raise TypeError("keep_none must be a boolean")
     if not callable(datetime_format) and datetime_format not in ("iso", "unix_ms"):
         raise ValueError("datetime_format must be 'iso', 'unix_ms', or callable")
 
@@ -121,6 +140,8 @@ def write_collection(
         converters=converter_map,
         column_dtypes=column_dtypes,
     )
+    if mode != "insert" and key_values is None:
+        raise ValueError(f"mode {mode!r} requires a document key column")
 
     target = _get_collection(db, collection, create_collection=create_collection)
     inserted_count = 0
@@ -152,12 +173,11 @@ def write_collection(
                 document["_key"] = key_values[position]
             documents.append(document)
 
-        batch_result = cast(
-            list[dict[str, Any] | ArangoServerError],
-            target.insert_many(
-                documents,
-                overwrite_mode="conflict",
-            ),
+        batch_result = _write_batch(
+            target,
+            documents,
+            mode=mode,
+            keep_none=keep_none,
         )
         if len(batch_result) != len(documents):
             raise RuntimeError(
@@ -178,6 +198,34 @@ def write_collection(
                 inserted_count += 1
 
     return WriteResult(inserted_count=inserted_count, errors=tuple(errors))
+
+
+def _write_batch(
+    collection: StandardCollection,
+    documents: list[dict[str, Any]],
+    *,
+    mode: WriteMode,
+    keep_none: bool,
+) -> list[dict[str, Any] | ArangoServerError]:
+    if mode == "insert":
+        result = collection.insert_many(documents, overwrite_mode="conflict")
+    elif mode == "update":
+        result = collection.update_many(
+            documents,
+            check_rev=False,
+            merge=True,
+            keep_none=keep_none,
+        )
+    elif mode == "replace":
+        result = collection.replace_many(documents, check_rev=False)
+    else:
+        result = collection.insert_many(
+            documents,
+            overwrite_mode="update",
+            keep_none=keep_none,
+            merge=True,
+        )
+    return cast(list[dict[str, Any] | ArangoServerError], result)
 
 
 def _resolve_index_label(
