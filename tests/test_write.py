@@ -14,6 +14,8 @@ from arango.exceptions import DocumentInsertError
 
 from pandas_arangodb import write_collection
 
+WriteMode = Literal["insert", "update", "replace", "upsert"]
+
 
 def test_write_collection_batches_insert_requests() -> None:
     """Split rows into bounded bulk calls and aggregate successful inserts."""
@@ -46,6 +48,64 @@ def test_write_collection_batches_insert_requests() -> None:
             overwrite_mode="conflict",
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "method", "options"),
+    [
+        (
+            "update",
+            "update_many",
+            {"check_rev": False, "merge": True, "keep_none": False},
+        ),
+        ("replace", "replace_many", {"check_rev": False}),
+        (
+            "upsert",
+            "insert_many",
+            {"overwrite_mode": "update", "keep_none": False, "merge": True},
+        ),
+    ],
+)
+def test_write_collection_dispatches_non_insert_modes(
+    mode: str,
+    method: str,
+    options: dict[str, object],
+) -> None:
+    """Map each non-insert mode to its native bulk driver operation."""
+    database = Mock()
+    collection = database.collection.return_value
+    bulk_method = getattr(collection, method)
+    bulk_method.return_value = [{"_key": "one"}]
+
+    result = write_collection(
+        pd.DataFrame({"_key": ["one"], "value": [1]}),
+        cast(StandardDatabase, database),
+        "items",
+        mode=cast(WriteMode, mode),
+        keep_none=False,
+    )
+
+    assert result.written_count == 1
+    bulk_method.assert_called_once_with(
+        [{"value": 1, "_key": "one"}],
+        **options,
+    )
+
+
+@pytest.mark.parametrize("mode", ["update", "replace", "upsert"])
+def test_write_collection_requires_keys_for_non_insert_modes(mode: str) -> None:
+    """Reject writes that cannot identify their target document reliably."""
+    database = Mock()
+
+    with pytest.raises(ValueError, match="requires a document key column"):
+        write_collection(
+            pd.DataFrame({"value": [1]}),
+            cast(StandardDatabase, database),
+            "items",
+            mode=cast(WriteMode, mode),
+        )
+
+    database.collection.assert_not_called()
 
 
 def test_write_collection_empty_frame_uses_no_bulk_request() -> None:
@@ -411,6 +471,132 @@ def test_write_collection_reports_duplicate_key_per_row(
     assert isinstance(result.errors[0].error, DocumentInsertError)
     assert result.errors[0].error.error_code == 1210
     assert sorted(collection.keys()) == ["duplicate", "one", "two"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("mode", "key_exists", "succeeds", "keeps_old_attribute"),
+    [
+        ("insert", True, False, True),
+        ("insert", False, True, False),
+        ("update", True, True, True),
+        ("update", False, False, False),
+        ("replace", True, True, False),
+        ("replace", False, False, False),
+        ("upsert", True, True, True),
+        ("upsert", False, True, False),
+    ],
+)
+def test_write_collection_mode_matrix(
+    arango_database: StandardDatabase,
+    mode: str,
+    key_exists: bool,
+    succeeds: bool,
+    keeps_old_attribute: bool,
+) -> None:
+    """Define each mode for keys that exist or are absent in the collection."""
+    collection = arango_database.create_collection("write_mode_matrix")
+    if key_exists:
+        collection.insert({"_key": "one", "value": 0, "old": True})
+
+    result = write_collection(
+        pd.DataFrame({"_key": ["one"], "value": [1]}),
+        arango_database,
+        collection.name,
+        mode=cast(WriteMode, mode),
+    )
+
+    assert result.written_count == int(succeeds)
+    assert result.error_count == int(not succeeds)
+    document = collection.get("one")
+    if succeeds:
+        assert document is not None
+        assert document["value"] == 1
+        assert ("old" in document) is keeps_old_attribute
+    elif key_exists:
+        assert document is not None
+        assert document["value"] == 0
+        assert document["old"] is True
+        assert result.errors[0].error.error_code == 1210
+    else:
+        assert document is None
+        assert result.errors[0].error.error_code == 1202
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("null_policy", "keep_none", "expected"),
+    [
+        ("omit", True, "original"),
+        ("null", True, None),
+        ("null", False, "absent"),
+    ],
+)
+def test_write_collection_update_null_semantics(
+    arango_database: StandardDatabase,
+    null_policy: str,
+    keep_none: bool,
+    expected: object,
+) -> None:
+    """Distinguish an omitted update attribute from a kept or removed null."""
+    collection = arango_database.create_collection("write_update_null")
+    collection.insert({"_key": "one", "optional": "original", "stable": 1})
+
+    result = write_collection(
+        pd.DataFrame(
+            {
+                "_key": ["one"],
+                "optional": pd.Series([None], dtype="object"),
+            }
+        ),
+        arango_database,
+        collection.name,
+        mode="update",
+        null_policy=cast(Literal["null", "omit"], null_policy),
+        keep_none=keep_none,
+    )
+
+    assert result.ok
+    document = collection.get("one")
+    assert document is not None
+    assert document["stable"] == 1
+    if expected == "absent":
+        assert "optional" not in document
+    else:
+        assert document["optional"] == expected
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("key_exists", [True, False])
+def test_write_collection_upsert_keep_none_applies_only_to_updates(
+    arango_database: StandardDatabase,
+    key_exists: bool,
+) -> None:
+    """Apply keep_none to an upsert update but not to a new insertion."""
+    collection = arango_database.create_collection("write_upsert_null")
+    if key_exists:
+        collection.insert({"_key": "one", "optional": "original"})
+
+    result = write_collection(
+        pd.DataFrame(
+            {
+                "_key": ["one"],
+                "optional": pd.Series([None], dtype="object"),
+            }
+        ),
+        arango_database,
+        collection.name,
+        mode="upsert",
+        keep_none=False,
+    )
+
+    assert result.ok
+    document = collection.get("one")
+    assert document is not None
+    if key_exists:
+        assert "optional" not in document
+    else:
+        assert document["optional"] is None
 
 
 @pytest.mark.integration
