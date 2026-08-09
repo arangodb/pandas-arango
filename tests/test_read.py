@@ -62,6 +62,114 @@ def test_read_aql_forwards_execution_options() -> None:
     assert frame.to_dict(orient="records") == [{"value": 42}]
 
 
+def test_read_aql_flattens_nested_objects_with_custom_separator() -> None:
+    """Flatten object paths and allow callers to choose their column separator."""
+    database = Mock()
+    database.aql.execute.return_value = iter(
+        [{"_key": "one", "profile": {"name": "Alice", "age": 30}}]
+    )
+
+    frame = read_aql(
+        cast(StandardDatabase, database),
+        "RETURN @document",
+        flatten=True,
+        flatten_separator="__",
+        columns=["_key", "profile__name", "profile__age"],
+        index="_key",
+    )
+
+    assert frame.index.tolist() == ["one"]
+    assert frame.columns.tolist() == ["profile__name", "profile__age"]
+    assert frame.iloc[0].to_dict() == {"profile__name": "Alice", "profile__age": 30}
+
+
+def test_read_aql_does_not_escape_flatten_separator_collisions() -> None:
+    """Expose pandas' ambiguous collision behavior instead of inventing escaping."""
+    database = Mock()
+    database.aql.execute.return_value = iter(
+        [{"profile.name": "literal", "profile": {"name": "nested"}}]
+    )
+
+    frame = read_aql(
+        cast(StandardDatabase, database),
+        "RETURN @document",
+        flatten=True,
+    )
+
+    assert frame.columns.tolist() == ["profile.name"]
+    assert frame.loc[0, "profile.name"] == "nested"
+
+
+def test_read_aql_flattens_inconsistent_nesting_into_union_columns() -> None:
+    """Create union columns with missing values for mixed object shapes."""
+    database = Mock()
+    database.aql.execute.return_value = iter(
+        [
+            {"profile": {"name": "Alice"}},
+            {"profile": "unknown"},
+            {"profile": {"age": 30}},
+        ]
+    )
+
+    frame = read_aql(
+        cast(StandardDatabase, database),
+        "FOR document IN @documents RETURN document",
+        flatten=True,
+    )
+
+    assert frame.columns.tolist() == ["profile.name", "profile", "profile.age"]
+    assert frame.loc[0, "profile.name"] == "Alice"
+    assert frame.loc[1, "profile"] == "unknown"
+    assert frame.loc[2, "profile.age"] == 30
+    assert pd.isna(frame.loc[0, "profile"])
+    assert pd.isna(frame.loc[1, "profile.name"])
+
+
+def test_read_aql_flatten_keeps_arrays_of_objects_intact() -> None:
+    """Keep object arrays in one cell instead of creating additional rows."""
+    database = Mock()
+    items = [{"sku": "one"}, {"sku": "two"}]
+    database.aql.execute.return_value = iter([{"order": {"items": items}}])
+
+    frame = read_aql(
+        cast(StandardDatabase, database),
+        "RETURN @document",
+        flatten=True,
+    )
+
+    assert frame.columns.tolist() == ["order.items"]
+    assert frame.loc[0, "order.items"] == items
+
+
+def test_iter_aql_applies_flattening_to_each_chunk() -> None:
+    """Use the same flattening behavior for every lazily produced frame."""
+    database = Mock()
+    cursor = _TrackingCursor(
+        {"value": value, "nested": {"even": value % 2 == 0}}
+        for value in range(3)
+    )
+    database.aql.execute.return_value = cursor
+
+    frames = list(
+        iter_aql(
+            cast(StandardDatabase, database),
+            "FOR value IN 0..2 RETURN {value, nested: {even: value % 2 == 0}}",
+            chunksize=2,
+            flatten=True,
+        )
+    )
+
+    assert [frame.columns.tolist() for frame in frames] == [
+        ["value", "nested.even"],
+        ["value", "nested.even"],
+    ]
+    assert [frame["nested.even"].tolist() for frame in frames] == [
+        [True, False],
+        [True],
+    ]
+    assert cursor.close_calls == [True]
+
+
 def test_read_aql_chunks_default_to_streaming_server_batches() -> None:
     """Use a streaming cursor and preserve an explicit server batch size."""
     database = Mock()

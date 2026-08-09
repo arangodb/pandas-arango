@@ -19,6 +19,8 @@ def read_aql(
     *,
     query_options: Mapping[str, Any] | None = None,
     columns: Sequence[str] | None = None,
+    flatten: bool = False,
+    flatten_separator: str = ".",
     index: str | Sequence[str] | None = None,
     chunksize: None = None,
 ) -> pd.DataFrame: ...
@@ -32,6 +34,8 @@ def read_aql(
     *,
     query_options: Mapping[str, Any] | None = None,
     columns: Sequence[str] | None = None,
+    flatten: bool = False,
+    flatten_separator: str = ".",
     index: str | Sequence[str] | None = None,
     chunksize: int,
 ) -> Generator[pd.DataFrame, None, None]: ...
@@ -44,6 +48,8 @@ def read_aql(
     *,
     query_options: Mapping[str, Any] | None = None,
     columns: Sequence[str] | None = None,
+    flatten: bool = False,
+    flatten_separator: str = ".",
     index: str | Sequence[str] | None = None,
     chunksize: int | None = None,
 ) -> pd.DataFrame | Generator[pd.DataFrame, None, None]:
@@ -58,9 +64,14 @@ def read_aql(
     more record fields to use as the DataFrame index; those fields must also
     be present in ``columns`` when both arguments are supplied.
 
-    Nested objects and arrays remain Python objects. ArangoDB system
-    attributes such as ``_key``, ``_id``, ``_from``, and ``_to`` remain
-    strings.
+    Nested objects and arrays remain Python objects by default. Set
+    ``flatten=True`` to flatten nested objects with :func:`pandas.json_normalize`
+    and join path components with ``flatten_separator``. Arrays remain intact.
+    Separator collisions are not escaped or reported. Prefer projecting the
+    desired tabular shape in AQL when possible.
+
+    ArangoDB system attributes such as ``_key``, ``_id``, ``_from``, and
+    ``_to`` remain strings.
     """
     if chunksize is not None:
         return iter_aql(
@@ -69,6 +80,8 @@ def read_aql(
             bind_vars,
             query_options=query_options,
             columns=columns,
+            flatten=flatten,
+            flatten_separator=flatten_separator,
             index=index,
             chunksize=chunksize,
         )
@@ -80,7 +93,13 @@ def read_aql(
         db.aql.execute(query, bind_vars=variables, **options),
     )
     records = list(cursor)
-    return pd.DataFrame.from_records(records, columns=columns, index=index)
+    return _records_to_frame(
+        records,
+        columns=columns,
+        flatten=flatten,
+        flatten_separator=flatten_separator,
+        index=index,
+    )
 
 
 def iter_aql(
@@ -91,6 +110,8 @@ def iter_aql(
     chunksize: int,
     query_options: Mapping[str, Any] | None = None,
     columns: Sequence[str] | None = None,
+    flatten: bool = False,
+    flatten_separator: str = ".",
     index: str | Sequence[str] | None = None,
 ) -> Generator[pd.DataFrame, None, None]:
     """Execute an AQL query and lazily yield bounded-size DataFrames.
@@ -99,6 +120,9 @@ def iter_aql(
     ``batch_size`` defaults to ``chunksize`` but can be set independently in
     ``query_options``. Peak client memory is therefore proportional to the
     larger of the two sizes.
+
+    ``flatten`` and ``flatten_separator`` have the same behavior as in
+    :func:`read_aql`, applied independently to each chunk.
 
     Close the returned generator when stopping early to release the
     server-side cursor immediately. Exhaustion and iteration errors also
@@ -119,6 +143,8 @@ def iter_aql(
         variables,
         options=options,
         columns=columns,
+        flatten=flatten,
+        flatten_separator=flatten_separator,
         index=index,
         chunksize=chunksize,
     )
@@ -131,6 +157,8 @@ def _iter_aql(
     *,
     options: dict[str, Any],
     columns: Sequence[str] | None,
+    flatten: bool,
+    flatten_separator: str,
     index: str | Sequence[str] | None,
     chunksize: int,
 ) -> Generator[pd.DataFrame, None, None]:
@@ -144,18 +172,42 @@ def _iter_aql(
             records = list(islice(cursor, chunksize))
             if not records:
                 if not has_read_data:
-                    yield pd.DataFrame.from_records(
+                    yield _records_to_frame(
                         records,
                         columns=columns,
+                        flatten=flatten,
+                        flatten_separator=flatten_separator,
                         index=index,
                     )
                 return
 
             has_read_data = True
-            yield pd.DataFrame.from_records(
+            yield _records_to_frame(
                 records,
                 columns=columns,
+                flatten=flatten,
+                flatten_separator=flatten_separator,
                 index=index,
             )
     finally:
         cursor.close(ignore_missing=True)
+
+
+def _records_to_frame(
+    records: list[Any],
+    *,
+    columns: Sequence[str] | None,
+    flatten: bool,
+    flatten_separator: str,
+    index: str | Sequence[str] | None,
+) -> pd.DataFrame:
+    if not flatten:
+        return pd.DataFrame.from_records(records, columns=columns, index=index)
+
+    frame = pd.json_normalize(records, sep=flatten_separator)
+    if columns is not None:
+        frame = frame.reindex(columns=columns)
+    if index is not None:
+        index_columns = [index] if isinstance(index, str) else list(index)
+        frame = frame.set_index(index_columns)
+    return frame
