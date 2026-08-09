@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from arango.database import StandardDatabase
 
-from pandas_arangodb import iter_aql, read_aql
+from pandas_arangodb import iter_aql, read_aql, read_collection
 
 
 class _TrackingCursor:
@@ -60,6 +60,125 @@ def test_read_aql_forwards_execution_options() -> None:
         cache=False,
     )
     assert frame.to_dict(orient="records") == [{"value": 42}]
+
+
+def test_read_collection_binds_columns_filter_and_limit() -> None:
+    """Compile collection options without interpolating user data into AQL."""
+    database = Mock()
+    database.aql.execute.return_value = iter([{"_key": "one", "name": "Alice"}])
+    filter_value = "Alice' REMOVE document IN users //"
+
+    frame = read_collection(
+        cast(StandardDatabase, database),
+        "users",
+        columns=["_key", "name"],
+        filter={"name": filter_value},
+        limit=5,
+        query_options={"cache": False},
+    )
+
+    query = (
+        "FOR document IN @@collection\n"
+        "    FILTER document[@filter_field_0] == @filter_value_0\n"
+        "    LIMIT @limit\n"
+        "    RETURN KEEP(document, @columns)"
+    )
+    database.aql.execute.assert_called_once_with(
+        query,
+        bind_vars={
+            "@collection": "users",
+            "filter_field_0": "name",
+            "filter_value_0": filter_value,
+            "limit": 5,
+            "columns": ["_key", "name"],
+        },
+        cache=False,
+    )
+    assert filter_value not in query
+    assert frame.to_dict(orient="records") == [{"_key": "one", "name": "Alice"}]
+
+
+def test_read_collection_compiles_projection_and_aql_filter() -> None:
+    """Expose trusted AQL expressions while binding their data and output names."""
+    database = Mock()
+    database.aql.execute.return_value = iter(
+        [{"user_key": "one", "city": "Berlin"}]
+    )
+
+    frame = read_collection(
+        cast(StandardDatabase, database),
+        "users",
+        projection={
+            "user_key": "document._key",
+            "city": "document.address.city",
+        },
+        aql_filter="document.age >= @limit",
+        bind_vars={"limit": 18},
+        limit=2,
+    )
+
+    query = (
+        "FOR document IN @@collection\n"
+        "    FILTER (document.age >= @limit)\n"
+        "    LIMIT @limit_1\n"
+        "    RETURN ZIP(@projection_names, "
+        "[document._key, document.address.city])"
+    )
+    database.aql.execute.assert_called_once_with(
+        query,
+        bind_vars={
+            "limit": 18,
+            "@collection": "users",
+            "limit_1": 2,
+            "projection_names": ["user_key", "city"],
+        },
+    )
+    assert frame.columns.tolist() == ["user_key", "city"]
+    assert frame.iloc[0].to_dict() == {"user_key": "one", "city": "Berlin"}
+
+
+def test_read_collection_reuses_chunked_reading() -> None:
+    """Return the existing streaming generator when a chunk size is supplied."""
+    database = Mock()
+    cursor = _TrackingCursor({"value": value} for value in range(3))
+    database.aql.execute.return_value = cursor
+
+    frames = list(
+        read_collection(
+            cast(StandardDatabase, database),
+            "numbers",
+            columns=["value"],
+            chunksize=2,
+        )
+    )
+
+    assert [frame["value"].tolist() for frame in frames] == [[0, 1], [2]]
+    database.aql.execute.assert_called_once_with(
+        "FOR document IN @@collection\n"
+        "    RETURN KEEP(document, @columns)",
+        bind_vars={"@collection": "numbers", "columns": ["value"]},
+        batch_size=2,
+        stream=True,
+    )
+    assert cursor.close_calls == [True]
+
+
+def test_read_collection_rejects_conflicting_selection_options() -> None:
+    """Reject ambiguous calls that provide both selection mechanisms."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        read_collection(
+            Mock(),
+            "users",
+            columns=["name"],
+            projection={"name": "document.name"},
+        )
+
+
+@pytest.mark.parametrize("limit", [-1, True, 1.5])
+def test_read_collection_rejects_invalid_limit(limit: Any) -> None:
+    """Reject limits that cannot be used as a non-negative AQL row count."""
+    with pytest.raises((TypeError, ValueError), match="limit"):
+        read_collection(Mock(), "users", limit=limit)
 
 
 def test_read_aql_flattens_nested_objects_with_custom_separator() -> None:
@@ -420,3 +539,53 @@ def test_read_aql_applies_columns_and_index(
     assert frame.columns.tolist() == ["value", "missing"]
     assert frame["value"].tolist() == [1, 2]
     assert frame["missing"].isna().all()
+
+
+@pytest.mark.integration
+def test_read_collection_applies_projection_filter_and_limit(
+    arango_database: StandardDatabase,
+) -> None:
+    """Run generated projection, filter, and limit AQL against ArangoDB."""
+    collection = arango_database.create_collection("users")
+    collection.insert_many(
+        [
+            {
+                "_key": "alice",
+                "active": True,
+                "score": 10,
+                "address": {"city": "Berlin"},
+            },
+            {
+                "_key": "bob",
+                "active": False,
+                "score": 20,
+                "address": {"city": "Paris"},
+            },
+            {
+                "_key": "carol",
+                "active": True,
+                "score": 30,
+                "address": {"city": "Rome"},
+            },
+        ]
+    )
+
+    frame = read_collection(
+        arango_database,
+        "users",
+        filter={"active": True},
+        projection={
+            "user_key": "document._key",
+            "city": "document.address.city",
+        },
+        aql_filter="document.score >= @minimum_score",
+        bind_vars={"minimum_score": 10},
+        limit=1,
+    )
+
+    assert len(frame) == 1
+    assert frame.columns.tolist() == ["user_key", "city"]
+    assert frame.iloc[0].to_dict() in [
+        {"user_key": "alice", "city": "Berlin"},
+        {"user_key": "carol", "city": "Rome"},
+    ]

@@ -102,6 +102,197 @@ def read_aql(
     )
 
 
+@overload
+def read_collection(
+    db: StandardDatabase,
+    collection: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filter: Mapping[str, Any] | None = None,
+    limit: int | None = None,
+    projection: Mapping[str, str] | None = None,
+    aql_filter: str | None = None,
+    bind_vars: Mapping[str, Any] | None = None,
+    query_options: Mapping[str, Any] | None = None,
+    chunksize: None = None,
+) -> pd.DataFrame: ...
+
+
+@overload
+def read_collection(
+    db: StandardDatabase,
+    collection: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filter: Mapping[str, Any] | None = None,
+    limit: int | None = None,
+    projection: Mapping[str, str] | None = None,
+    aql_filter: str | None = None,
+    bind_vars: Mapping[str, Any] | None = None,
+    query_options: Mapping[str, Any] | None = None,
+    chunksize: int,
+) -> Generator[pd.DataFrame, None, None]: ...
+
+
+def read_collection(
+    db: StandardDatabase,
+    collection: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filter: Mapping[str, Any] | None = None,
+    limit: int | None = None,
+    projection: Mapping[str, str] | None = None,
+    aql_filter: str | None = None,
+    bind_vars: Mapping[str, Any] | None = None,
+    query_options: Mapping[str, Any] | None = None,
+    chunksize: int | None = None,
+) -> pd.DataFrame | Generator[pd.DataFrame, None, None]:
+    """Read documents from a collection through generated AQL.
+
+    ``filter`` supports equality checks on top-level attributes only. Use
+    ``aql_filter`` and ``bind_vars`` for other conditions. ``projection`` maps
+    output column names to raw AQL expressions; callers are responsible for
+    providing trusted expressions. ``columns`` and ``projection`` are mutually
+    exclusive.
+
+    Collection names, column names, equality-filter names and values, limits,
+    and projection output names are sent as bind variables. Passing
+    ``chunksize`` delegates to :func:`read_aql` and returns its lazy generator.
+    """
+    if not isinstance(collection, str):
+        raise TypeError("collection must be a string")
+    if not collection:
+        raise ValueError("collection must not be empty")
+    if columns is not None and projection is not None:
+        raise ValueError("columns and projection are mutually exclusive")
+    if isinstance(limit, bool) or (limit is not None and not isinstance(limit, int)):
+        raise TypeError("limit must be an integer")
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be greater than or equal to zero")
+
+    selected_columns = _validate_columns(columns)
+    projected_columns = _validate_projection(projection)
+    filters = _validate_filter(filter)
+    variables = dict(bind_vars) if bind_vars is not None else {}
+
+    collection_name = _add_bind_var(
+        variables,
+        "collection",
+        collection,
+        collection=True,
+    )
+    query_lines = [f"FOR document IN @@{collection_name}"]
+
+    for position, (attribute, value) in enumerate(filters):
+        field_name = _add_bind_var(
+            variables,
+            f"filter_field_{position}",
+            attribute,
+        )
+        value_name = _add_bind_var(
+            variables,
+            f"filter_value_{position}",
+            value,
+        )
+        query_lines.append(
+            f"    FILTER document[@{field_name}] == @{value_name}"
+        )
+
+    if aql_filter is not None:
+        if not isinstance(aql_filter, str):
+            raise TypeError("aql_filter must be a string")
+        if not aql_filter.strip():
+            raise ValueError("aql_filter must not be empty")
+        query_lines.append(f"    FILTER ({aql_filter})")
+
+    if limit is not None:
+        limit_name = _add_bind_var(variables, "limit", limit)
+        query_lines.append(f"    LIMIT @{limit_name}")
+
+    result_columns: list[str] | None
+    if projected_columns is not None:
+        result_columns = list(projected_columns)
+        projection_name = _add_bind_var(
+            variables,
+            "projection_names",
+            result_columns,
+        )
+        expressions = ", ".join(projected_columns.values())
+        query_lines.append(f"    RETURN ZIP(@{projection_name}, [{expressions}])")
+    elif selected_columns is not None:
+        result_columns = selected_columns
+        columns_name = _add_bind_var(variables, "columns", result_columns)
+        query_lines.append(f"    RETURN KEEP(document, @{columns_name})")
+    else:
+        result_columns = None
+        query_lines.append("    RETURN document")
+
+    return read_aql(
+        db,
+        "\n".join(query_lines),
+        variables,
+        query_options=query_options,
+        columns=result_columns,
+        chunksize=chunksize,
+    )
+
+
+def _validate_columns(columns: Sequence[str] | None) -> list[str] | None:
+    if columns is None:
+        return None
+    if isinstance(columns, str):
+        raise TypeError("columns must be a sequence of strings")
+
+    result = list(columns)
+    if any(not isinstance(column, str) for column in result):
+        raise TypeError("columns must contain only strings")
+    return result
+
+
+def _validate_projection(
+    projection: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    if projection is None:
+        return None
+
+    result = dict(projection)
+    if any(not isinstance(name, str) for name in result):
+        raise TypeError("projection names must be strings")
+    if any(not isinstance(expression, str) for expression in result.values()):
+        raise TypeError("projection expressions must be strings")
+    if any(not expression.strip() for expression in result.values()):
+        raise ValueError("projection expressions must not be empty")
+    return result
+
+
+def _validate_filter(filter: Mapping[str, Any] | None) -> list[tuple[str, Any]]:
+    if filter is None:
+        return []
+
+    result = list(filter.items())
+    if any(not isinstance(attribute, str) for attribute, _ in result):
+        raise TypeError("filter attribute names must be strings")
+    return result
+
+
+def _add_bind_var(
+    variables: dict[str, Any],
+    preferred_name: str,
+    value: Any,
+    *,
+    collection: bool = False,
+) -> str:
+    name = preferred_name
+    suffix = 1
+    key = f"@{name}" if collection else name
+    while key in variables:
+        name = f"{preferred_name}_{suffix}"
+        suffix += 1
+        key = f"@{name}" if collection else name
+    variables[key] = value
+    return name
+
+
 def iter_aql(
     db: StandardDatabase,
     query: str,

@@ -1,6 +1,6 @@
 """ArangoDB integration for pandas."""
 
-from pandas_arangodb.read import iter_aql, read_aql
+from pandas_arangodb.read import iter_aql, read_aql, read_collection
 from pandas_arangodb.write import WriteError, WriteResult, write_collection
 
 __all__ = [
@@ -8,5 +8,6 @@ __all__ = [
     "WriteResult",
     "iter_aql",
     "read_aql",
+    "read_collection",
     "write_collection",
 ]

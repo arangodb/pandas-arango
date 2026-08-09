@@ -88,6 +88,45 @@ of `chunksize` and `batch_size`, because the driver deserializes a complete
 server batch. Close the iterator when stopping early so its server cursor is
 released immediately. An empty chunked result yields one empty DataFrame.
 
+## Reading collections
+
+`read_collection` generates a small AQL query for common collection reads:
+
+```python
+from pandas_arangodb import read_collection
+
+frame = read_collection(
+    database,
+    "users",
+    columns=["_key", "name", "country"],
+    filter={"active": True},
+    limit=1_000,
+)
+```
+
+The `filter` mapping supports equality checks on top-level attributes only.
+Collection names, column names, filter names and values, and limits are passed
+as AQL bind variables. For nested fields, ranges, sorting, or other query
+logic, use `read_aql` or the explicit AQL escape hatches:
+
+```python
+frame = read_collection(
+    database,
+    "users",
+    projection={
+        "user_key": "document._key",
+        "city": "document.address.city",
+    },
+    aql_filter="document.score >= @minimum_score",
+    bind_vars={"minimum_score": 10},
+)
+```
+
+Projection values and `aql_filter` are raw AQL code and must be trusted.
+Projection output names and their data remain bind variables. `columns` and
+`projection` cannot be used together. Pass `chunksize` to receive the same
+streaming DataFrame generator provided by chunked `read_aql`.
+
 ## Writing collections
 
 `write_collection` writes DataFrame rows with explicit bulk batching:
