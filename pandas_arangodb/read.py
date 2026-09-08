@@ -72,6 +72,29 @@ def read_aql(
 
     ArangoDB system attributes such as ``_key``, ``_id``, ``_from``, and
     ``_to`` remain strings.
+
+    Args:
+        db (StandardDatabase): Database used to execute the query.
+        query (str): AQL query to execute.
+        bind_vars (Mapping[str, Any] | None): Values bound to AQL parameters.
+        query_options (Mapping[str, Any] | None): Additional keyword arguments
+            passed to ``db.aql.execute``.
+        columns (Sequence[str] | None): Columns to select and their order.
+        flatten (bool): Whether to flatten nested objects into columns.
+        flatten_separator (str): Separator used between flattened path parts.
+        index (str | Sequence[str] | None): Column or columns to use as the
+            DataFrame index.
+        chunksize (int | None): Number of records per lazily returned DataFrame.
+            If omitted, all records are returned in one DataFrame.
+
+    Returns:
+        DataFrame | Generator[DataFrame, None, None]: One eagerly materialized
+        DataFrame, or a lazy generator when ``chunksize`` is set.
+
+    Raises:
+        TypeError: If ``chunksize`` is not an integer.
+        ValueError: If ``chunksize`` is not positive.
+        ArangoError: If query execution fails.
     """
     if chunksize is not None:
         return iter_aql(
@@ -158,6 +181,33 @@ def read_collection(
     Collection names, column names, equality-filter names and values, limits,
     and projection output names are sent as bind variables. Passing
     ``chunksize`` delegates to :func:`read_aql` and returns its lazy generator.
+
+    Args:
+        db (StandardDatabase): Database containing the collection.
+        collection (str): Name of the collection to read.
+        columns (Sequence[str] | None): Document attributes to select and their
+            order.
+        filter (Mapping[str, Any] | None): Equality filters for top-level
+            document attributes.
+        limit (int | None): Maximum number of documents to return.
+        projection (Mapping[str, str] | None): Mapping of output column names to
+            trusted AQL expressions.
+        aql_filter (str | None): Additional trusted AQL filter expression.
+        bind_vars (Mapping[str, Any] | None): Values bound to parameters used by
+            ``aql_filter`` or ``projection``.
+        query_options (Mapping[str, Any] | None): Additional keyword arguments
+            passed to ``db.aql.execute``.
+        chunksize (int | None): Number of records per lazily returned DataFrame.
+            If omitted, all records are returned in one DataFrame.
+
+    Returns:
+        DataFrame | Generator[DataFrame, None, None]: One eagerly materialized
+        DataFrame, or a lazy generator when ``chunksize`` is set.
+
+    Raises:
+        TypeError: If an argument has an invalid type.
+        ValueError: If an argument value or combination is invalid.
+        ArangoError: If query execution fails.
     """
     if not isinstance(collection, str):
         raise TypeError("collection must be a string")
@@ -318,6 +368,27 @@ def iter_aql(
     Close the returned generator when stopping early to release the
     server-side cursor immediately. Exhaustion and iteration errors also
     close it. An empty query result yields one empty DataFrame.
+
+    Args:
+        db (StandardDatabase): Database used to execute the query.
+        query (str): AQL query to execute.
+        bind_vars (Mapping[str, Any] | None): Values bound to AQL parameters.
+        chunksize (int): Number of records per yielded DataFrame.
+        query_options (Mapping[str, Any] | None): Additional keyword arguments
+            passed to ``db.aql.execute``.
+        columns (Sequence[str] | None): Columns to select and their order.
+        flatten (bool): Whether to flatten nested objects into columns.
+        flatten_separator (str): Separator used between flattened path parts.
+        index (str | Sequence[str] | None): Column or columns to use as the
+            DataFrame index.
+
+    Returns:
+        Generator[DataFrame, None, None]: Lazy generator of DataFrames.
+
+    Raises:
+        TypeError: If ``chunksize`` is not an integer.
+        ValueError: If ``chunksize`` is not positive.
+        ArangoError: If query execution or cursor iteration fails.
     """
     if isinstance(chunksize, bool) or not isinstance(chunksize, int):
         raise TypeError("chunksize must be an integer")

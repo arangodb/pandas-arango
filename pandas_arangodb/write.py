@@ -23,7 +23,13 @@ WriteMode = Literal["insert", "update", "replace", "upsert"]
 
 @dataclass(frozen=True)
 class WriteError:
-    """A document error associated with its source DataFrame row."""
+    """A document error associated with its source DataFrame row.
+
+    Args:
+        row_position (int): Zero-based position of the source DataFrame row.
+        row_index (Any): Index label of the source DataFrame row.
+        error (ArangoServerError): Error returned for the document.
+    """
 
     row_position: int
     row_index: Any
@@ -32,29 +38,50 @@ class WriteError:
 
 @dataclass(frozen=True)
 class WriteResult:
-    """Aggregate result of a collection write."""
+    """Aggregate result of a collection write.
+
+    Args:
+        inserted_count (int): Number of documents written successfully.
+        errors (tuple[WriteError, ...]): Per-document write errors.
+    """
 
     inserted_count: int
     errors: tuple[WriteError, ...] = ()
 
     @property
     def written_count(self) -> int:
-        """Return the number of documents successfully written."""
+        """Return the number of documents successfully written.
+
+        Returns:
+            int: Number of documents written successfully.
+        """
         return self.inserted_count
 
     @property
     def error_count(self) -> int:
-        """Return the number of documents that failed."""
+        """Return the number of documents that failed.
+
+        Returns:
+            int: Number of documents that failed.
+        """
         return len(self.errors)
 
     @property
     def attempted_count(self) -> int:
-        """Return the total number of attempted documents."""
+        """Return the total number of attempted documents.
+
+        Returns:
+            int: Number of documents attempted.
+        """
         return self.written_count + self.error_count
 
     @property
     def ok(self) -> bool:
-        """Return whether every document was written."""
+        """Return whether every document was written.
+
+        Returns:
+            bool: ``True`` if every document was written successfully.
+        """
         return not self.errors
 
 
@@ -103,6 +130,38 @@ def write_collection(
     remain unchanged. Sent nulls are stored when ``keep_none=True`` and remove
     existing attributes when ``keep_none=False``. ``keep_none`` does not
     affect insert or replace operations.
+
+    Args:
+        frame (DataFrame): Source rows to convert into documents.
+        db (StandardDatabase): Database containing the target collection.
+        collection (str): Name of the target collection.
+        mode (WriteMode): Write behavior. One of ``"insert"``, ``"update"``,
+            ``"replace"``, or ``"upsert"``.
+        key_column (str | None): Column to map to ``_key``. If the default
+            ``_key`` is absent, ArangoDB generates keys. Pass ``None`` to
+            disable key mapping.
+        include_index (bool): Whether to add the DataFrame index to documents.
+        index_label (str | None): Document attribute used for the included
+            index.
+        batch_size (int): Maximum number of documents sent in each request.
+        create_collection (bool): Whether to create a missing collection.
+        null_policy (Literal["null", "omit"]): Whether missing column values
+            become JSON null or are omitted.
+        keep_none (bool): Whether update and upsert keep explicitly sent null
+            attributes.
+        datetime_format (DatetimeFormat): Encoding for timezone-aware datetime
+            values: ``"iso"``, ``"unix_ms"``, or a callable.
+        converters (Mapping[str, Callable[[Any], Any]] | None): Per-column
+            converters applied before built-in JSON conversion.
+
+    Returns:
+        WriteResult: Counts and per-document errors for the attempted write.
+
+    Raises:
+        TypeError: If an argument or DataFrame value has an invalid type.
+        ValueError: If configuration, keys, or DataFrame values are invalid.
+        RuntimeError: If the driver returns an unexpected number of results.
+        ArangoError: If a request-level database operation fails.
     """
     if mode not in ("insert", "update", "replace", "upsert"):
         raise ValueError("mode must be 'insert', 'update', 'replace', or 'upsert'")
