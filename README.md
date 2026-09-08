@@ -1,270 +1,110 @@
 # pandas-arangodb
 
-A connector between ArangoDB and pandas DataFrames.
+`pandas-arangodb` is a synchronous connector for moving data between ArangoDB
+documents and pandas DataFrames. It supports AQL and collection reads, chunked
+results, and batched insert, update, replace, and upsert operations.
 
-## Reading AQL results
+## Requirements
 
-`read_aql` executes a query and eagerly materializes its cursor as one
-DataFrame when `chunksize` is omitted:
+- Python 3.11 or newer
+- pandas 2.2 or newer
+- python-arango 8.0 or newer
+- A running ArangoDB server
+
+Install it with:
+
+```console
+python -m pip install pandas-arangodb
+```
+
+## Quickstart
+
+Connect with `python-arango`, read documents into a DataFrame, use pandas, and
+write the result to another collection:
 
 ```python
-from pandas_arangodb import read_aql
+from arango import ArangoClient
+from pandas_arangodb import read_collection, write_collection
 
-frame = read_aql(
+client = ArangoClient(hosts="http://127.0.0.1:8529")
+database = client.db("my_database", username="root", password="passwd")
+
+users = read_collection(
     database,
-    "FOR document IN users FILTER document.active RETURN document",
+    "users",
     columns=["_key", "name", "active"],
-    index="_key",
 )
+active_users = users.loc[users["active"]]
+
+result = write_collection(
+    active_users,
+    database,
+    "active_users",
+    mode="upsert",
+    create_collection=True,
+)
+print(result.written_count)
 ```
 
-Missing attributes become NA values. Nested objects and arrays remain values
-in object columns, and ArangoDB system attributes remain strings. An empty AQL
-result has no recoverable schema: it produces a DataFrame with the names passed
-through `columns`, or no columns when `columns` is omitted.
+Use `read_aql` for custom queries and pass `chunksize` for large results.
 
-Prefer shaping nested data in AQL instead of fetching complete documents:
+### Advanced example
+
+Converters let you store Python values that are not JSON-compatible by
+default. This example preserves decimal prices as strings, converts UUIDs to
+document keys, omits missing fields, and reads matching documents in chunks:
 
 ```python
-frame = read_aql(
-    database,
-    """
-    FOR document IN users
-        RETURN {
-            user_key: document._key,
-            city: document.address.city
+from decimal import Decimal
+from uuid import uuid4
+
+import pandas as pd
+from pandas_arangodb import read_aql, write_collection
+
+measurements = pd.DataFrame(
+    [
+        {
+            "measurement_id": uuid4(),
+            "price": Decimal("19.95"),
+            "captured_at": pd.Timestamp.now(tz="UTC"),
+            "comment": pd.NA,
         }
-    """,
+    ]
 )
-```
 
-This reduces network traffic and makes the returned schema explicit. When AQL
-projection is not practical, opt in to client-side flattening:
-
-```python
-frame = read_aql(
-    database,
-    "FOR document IN users RETURN document",
-    flatten=True,
-    flatten_separator=".",
-)
-```
-
-A nested value such as `{"address": {"city": "Berlin"}}` becomes an
-`address.city` column. Inconsistent document shapes produce the union of
-flattened columns with missing values within each returned DataFrame. Chunked
-reads can therefore have different columns per chunk unless `columns` is
-provided. Arrays, including arrays of objects, remain values in a single
-column and are not exploded into rows.
-
-Flattening delegates to `pandas.json_normalize`. Separators in literal keys
-are not escaped or reported, so `{"address.city": "literal"}` conflicts with
-`{"address": {"city": "nested"}}`; pandas keeps the nested value in this
-direct collision. Choose a different `flatten_separator` or use AQL projection
-when document keys can contain the separator. The default `flatten=False`
-preserves nested objects exactly as returned by ArangoDB.
-
-For large results, pass `chunksize` or call `iter_aql` directly:
-
-```python
-from pandas_arangodb import iter_aql
-
-chunks = iter_aql(
-    database,
-    "FOR document IN users RETURN document",
-    chunksize=10_000,
-)
-try:
-    for chunk in chunks:
-        process(chunk)
-finally:
-    chunks.close()
-```
-
-Chunked reads use streaming AQL cursors and default the driver's server-side
-`batch_size` to `chunksize`. Set `query_options={"batch_size": ...}` to tune
-the server batch separately. Peak client memory is proportional to the larger
-of `chunksize` and `batch_size`, because the driver deserializes a complete
-server batch. Close the iterator when stopping early so its server cursor is
-released immediately. An empty chunked result yields one empty DataFrame.
-
-## Reading collections
-
-`read_collection` generates a small AQL query for common collection reads:
-
-```python
-from pandas_arangodb import read_collection
-
-frame = read_collection(
-    database,
-    "users",
-    columns=["_key", "name", "country"],
-    filter={"active": True},
-    limit=1_000,
-)
-```
-
-The `filter` mapping supports equality checks on top-level attributes only.
-Collection names, column names, filter names and values, and limits are passed
-as AQL bind variables. For nested fields, ranges, sorting, or other query
-logic, use `read_aql` or the explicit AQL escape hatches:
-
-```python
-frame = read_collection(
-    database,
-    "users",
-    projection={
-        "user_key": "document._key",
-        "city": "document.address.city",
-    },
-    aql_filter="document.score >= @minimum_score",
-    bind_vars={"minimum_score": 10},
-)
-```
-
-Projection values and `aql_filter` are raw AQL code and must be trusted.
-Projection output names and their data remain bind variables. `columns` and
-`projection` cannot be used together. Pass `chunksize` to receive the same
-streaming DataFrame generator provided by chunked `read_aql`.
-
-## Writing collections
-
-`write_collection` writes DataFrame rows with explicit bulk batching:
-
-```python
-from pandas_arangodb import write_collection
-
-result = write_collection(
-    frame,
-    database,
-    "users",
-    key_column="customer_id",
-    batch_size=1_000,
-)
-```
-
-The key column is renamed to `_key`. Key values are explicitly converted to
-strings and validated before any documents are written. If the default `_key`
-column is absent, ArangoDB generates keys. Duplicate keys and other
-per-document failures are available through `result.errors`; each error carries
-the original DataFrame row position and index label. `result.written_count`
-reports successful rows. Request-level errors, such as a missing collection,
-are raised by the driver.
-
-Set `create_collection=True` to create a missing collection. DataFrame indexes
-are excluded by default. To include one, opt in explicitly:
-
-```python
-result = write_collection(
-    frame,
-    database,
-    "users",
-    include_index=True,
-    index_label="_key",
-)
-```
-
-A RangeIndex is not used as `_key` through an implicit index name. Setting
-`index_label="_key"` is an explicit opt-in.
-
-Write conversion is configured per call:
-
-```python
-result = write_collection(
-    frame,
+write_collection(
+    measurements,
     database,
     "measurements",
+    key_column="measurement_id",
+    create_collection=True,
     null_policy="omit",
-    datetime_format="unix_ms",
-    converters={"price": str, "uuid": str},
+    converters={"measurement_id": str, "price": str},
 )
+
+chunks = read_aql(
+    database,
+    """
+    FOR measurement IN measurements
+        FILTER TO_NUMBER(measurement.price) >= @minimum_price
+        RETURN measurement
+    """,
+    bind_vars={"minimum_price": 10},
+    chunksize=10_000,
+)
+for chunk in chunks:
+    print(chunk[["_key", "price", "captured_at"]])
 ```
 
-`null_policy="null"` converts `None`, `NaN`, `pandas.NA`, and `NaT` column
-values to JSON null. `null_policy="omit"` leaves the corresponding document
-attribute out. Missing values inside nested lists or objects become JSON null;
-the omit policy applies to DataFrame columns.
+## Constraints
 
-Timezone-aware timestamps use ISO 8601 strings by default. Pass
-`datetime_format="unix_ms"` for Unix milliseconds or a callable for a custom
-JSON-safe representation. Timezone-naive timestamps are rejected; the
-connector never assumes UTC. Per-column converters run on non-missing values
-before built-in datetime conversion and JSON validation. Values such as
-`Decimal` and `UUID` therefore require a converter. Unsupported values produce
-an error naming the source column, dtype, and row position.
+- Nested objects and arrays remain values in DataFrame cells by default.
+- AQL projection is preferred; client-side flattening is opt-in.
+- Writes accept JSON-compatible values. Other values require converters.
+- Timezone-naive timestamps are rejected instead of assuming a timezone.
 
-Nullable pandas integers and booleans remain Python integer and boolean values
-instead of being coerced through floats. Some JSON/VelocyPack client stacks
-cannot preserve integer precision beyond 2^53, so applications using larger
-integers should choose an explicit string converter.
+## More information
 
-Four write modes are available:
-
-| Mode | Existing `_key` | Absent `_key` in collection | Attributes |
-| --- | --- | --- | --- |
-| `insert` | Per-row conflict error | Insert | All supplied attributes |
-| `update` | Update | Per-row not-found error | Supplied attributes only |
-| `replace` | Replace | Per-row not-found error | Complete replacement |
-| `upsert` | Update | Insert | Supplied attributes only |
-
-`update`, `replace`, and `upsert` require an explicit document key column.
-Insert may omit `_key`, in which case ArangoDB generates one. Update and upsert
-merge nested objects. Replace removes old user attributes that are absent from
-the DataFrame row.
-
-For update and the update branch of upsert, `null_policy="omit"` leaves an
-existing attribute unchanged because the attribute is not sent. With
-`null_policy="null"`, the attribute is sent as null: `keep_none=True` stores
-the null, while `keep_none=False` removes the attribute. For a newly inserted
-document, null remains null. Replace stores supplied nulls normally because
-`keep_none` applies only to update operations.
-
-Write modes never drop, recreate, or truncate a collection. Collection
-creation remains an independent `create_collection=True` opt-in, preserving
-indexes, graph definitions, and collection configuration on existing
-collections.
-
-## Compatibility
-
-pandas-arangodb supports Python 3.11 through 3.14, pandas 2.2 or newer, and
-python-arango 8.0 or newer. CI tests the minimum dependency versions on Python
-3.11 and the latest compatible dependency versions on Python 3.14.
-
-## Development
-
-Install the package and development tools:
-
-```console
-python -m pip install -e ".[dev]"
-```
-
-Start a local ArangoDB instance and run the test suite:
-
-```console
-docker compose up -d --wait
-python -m pytest
-docker compose down
-```
-
-Without a local server, integration tests are skipped. CI sets
-`PANDAS_ARANGODB_REQUIRE_SERVER=1` so an unavailable server fails the suite.
-
-Run the static checks with:
-
-```console
-python -m ruff check .
-python -m mypy
-```
-
-Install the pre-commit hooks with:
-
-```console
-python -m pre_commit install
-```
-
-Pre-commit runs the pinned Ruff and mypy versions in managed environments. To
-run the hooks against the entire repository:
-
-```console
-python -m pre_commit run --all-files
-```
+- [Example notebook](examples/example.ipynb)
+- [Documentation](docs/index.rst)
+- [Contributing and development](CONTRIBUTING.md)
