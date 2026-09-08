@@ -29,6 +29,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+example = [
+    "matplotlib>=3.10",
+]
 test = [
     "pytest>=8.0",
 ]
@@ -58,6 +61,8 @@ markers = [
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+extend-exclude = ["examples/example.ipynb"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
