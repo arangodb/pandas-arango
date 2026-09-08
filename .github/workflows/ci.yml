@@ -26,15 +26,15 @@ jobs:
     name: ${{ matrix.name }} dependencies
     services:
       arangodb:
-        image: arangodb/arangodb:3.12
+        image: arangodb/core-preview:4.0-nightly
         env:
           ARANGO_ROOT_PASSWORD: passwd
         ports:
           - 8529:8529
         options: >-
-          --health-cmd "arangosh --server.endpoint tcp://127.0.0.1:8529
-          --server.username root --server.password passwd
-          --javascript.execute-string 'db._version()'"
+          --health-cmd "wget --spider --quiet --tries=1
+          --header='Authorization: Basic cm9vdDpwYXNzd2Q='
+          http://127.0.0.1:8529/_api/version"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20

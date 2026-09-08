@@ -1,6 +1,6 @@
 services:
   arangodb:
-    image: arangodb/arangodb:3.12
+    image: arangodb/core-preview:4.0-nightly
     environment:
       ARANGO_ROOT_PASSWORD: passwd
     ports:
@@ -8,16 +8,13 @@ services:
     healthcheck:
       test:
         - CMD
-        - arangosh
-        - --server.endpoint
-        - tcp://127.0.0.1:8529
-        - --server.username
-        - root
-        - --server.password
-        - passwd
-        - --javascript.execute-string
-        - db._version()
+        - wget
+        - --spider
+        - --quiet
+        - --tries=1
+        - --header
+        - "Authorization: Basic cm9vdDpwYXNzd2Q="
+        - http://127.0.0.1:8529/_api/version
       interval: 5s
       timeout: 5s
       retries: 20
-
