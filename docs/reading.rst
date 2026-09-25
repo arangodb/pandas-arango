@@ -1,8 +1,8 @@
 Reading data
 ============
 
-Use :func:`~pandas_arangodb.read_collection` for common collection reads and
-:func:`~pandas_arangodb.read_aql` when the query needs sorting, joins,
+Use :func:`~pandas_arango.read_collection` for common collection reads and
+:func:`~pandas_arango.read_aql` when the query needs sorting, joins,
 traversals, or other AQL features.
 
 .. testsetup::
@@ -39,7 +39,7 @@ Collection reads
 
 .. doctest::
 
-   >>> from pandas_arangodb import read_collection
+   >>> from pandas_arango import read_collection
    >>> active = read_collection(
    ...     database,
    ...     "users",
@@ -74,7 +74,7 @@ Bind variables keep data separate from AQL source code.
 
 .. doctest::
 
-   >>> from pandas_arangodb import read_aql
+   >>> from pandas_arango import read_aql
    >>> selected = read_aql(
    ...     database,
    ...     """

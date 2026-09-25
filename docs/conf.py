@@ -1,4 +1,4 @@
-"""Sphinx configuration for pandas-arangodb."""
+"""Sphinx configuration for pandas-arango."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-project = "pandas-arangodb"
+project = "pandas-arango"
 copyright = "2026, ArangoDB GmbH"
 author = "Alexandru Petenchea"
-release = package_version("pandas-arangodb")
+release = package_version("pandas-arango")
 
 extensions = [
     "sphinx_rtd_theme",
@@ -35,11 +35,11 @@ import os
 from arango import ArangoClient
 
 client = ArangoClient(
-    hosts=os.environ.get("PANDAS_ARANGODB_TEST_URL", "http://127.0.0.1:8529")
+    hosts=os.environ.get("PANDAS_ARANGO_TEST_URL", "http://127.0.0.1:8529")
 )
-password = os.environ.get("PANDAS_ARANGODB_TEST_PASSWORD", "passwd")
+password = os.environ.get("PANDAS_ARANGO_TEST_PASSWORD", "passwd")
 system_database = client.db("_system", username="root", password=password)
-database_name = "pandas_arangodb_docs"
+database_name = "pandas_arango_docs"
 if system_database.has_database(database_name):
     system_database.delete_database(database_name)
 system_database.create_database(database_name)

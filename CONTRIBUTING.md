@@ -29,8 +29,8 @@ Local tests and documentation use these defaults:
 - Username: `root`
 - Password: `passwd`
 
-Override them with `PANDAS_ARANGODB_TEST_URL`,
-`PANDAS_ARANGODB_TEST_USERNAME`, and `PANDAS_ARANGODB_TEST_PASSWORD`.
+Override them with `PANDAS_ARANGO_TEST_URL`,
+`PANDAS_ARANGO_TEST_USERNAME`, and `PANDAS_ARANGO_TEST_PASSWORD`.
 
 Stop the service when finished:
 
@@ -49,7 +49,7 @@ python -m pytest
 Tests are skipped when ArangoDB is unavailable. Require a live server with:
 
 ```console
-PANDAS_ARANGODB_REQUIRE_SERVER=1 python -m pytest
+PANDAS_ARANGO_REQUIRE_SERVER=1 python -m pytest
 ```
 
 Run the static checks:
@@ -77,7 +77,7 @@ as errors:
 make -C docs SPHINXOPTS="-W --keep-going" doctest
 ```
 
-Documentation tests recreate a database named `pandas_arangodb_docs`.
+Documentation tests recreate a database named `pandas_arango_docs`.
 
 Remove generated documentation with:
 

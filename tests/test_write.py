@@ -12,7 +12,7 @@ import pytest
 from arango.database import StandardDatabase
 from arango.exceptions import DocumentInsertError
 
-from pandas_arangodb import write_collection
+from pandas_arango import write_collection
 
 WriteMode = Literal["insert", "update", "replace", "upsert"]
 

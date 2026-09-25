@@ -2,7 +2,7 @@ Document-to-table behavior
 ==========================
 
 ArangoDB collections can contain documents with different shapes. A DataFrame
-is rectangular, so ``pandas-arangodb`` applies these rules when reading:
+is rectangular, so ``pandas-arango`` applies these rules when reading:
 
 .. list-table::
    :header-rows: 1
@@ -29,7 +29,7 @@ values in those rows:
 
 .. doctest::
 
-   >>> from pandas_arangodb import read_aql
+   >>> from pandas_arango import read_aql
    >>> frame = read_aql(
    ...     database,
    ...     "FOR item IN [{name: 'Ada', score: 10}, {name: 'Grace'}] RETURN item",

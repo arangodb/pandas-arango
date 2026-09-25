@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from arango.database import StandardDatabase
 
-from pandas_arangodb import iter_aql, read_aql, read_collection
+from pandas_arango import iter_aql, read_aql, read_collection
 
 
 class _TrackingCursor:

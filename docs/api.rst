@@ -4,19 +4,19 @@ API reference
 Reading
 -------
 
-.. autofunction:: pandas_arangodb.read_aql
+.. autofunction:: pandas_arango.read_aql
 
-.. autofunction:: pandas_arangodb.iter_aql
+.. autofunction:: pandas_arango.iter_aql
 
-.. autofunction:: pandas_arangodb.read_collection
+.. autofunction:: pandas_arango.read_collection
 
 Writing
 -------
 
-.. autofunction:: pandas_arangodb.write_collection
+.. autofunction:: pandas_arango.write_collection
 
-.. autoclass:: pandas_arangodb.WriteResult
+.. autoclass:: pandas_arango.WriteResult
    :members:
 
-.. autoclass:: pandas_arangodb.WriteError
+.. autoclass:: pandas_arango.WriteError
    :members:

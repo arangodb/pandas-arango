@@ -16,7 +16,7 @@ Write a DataFrame and read it back with AQL:
 .. doctest::
 
    >>> import pandas as pd
-   >>> from pandas_arangodb import read_aql, write_collection
+   >>> from pandas_arango import read_aql, write_collection
    >>> source = pd.DataFrame(
    ...     [
    ...         {"_key": "ada", "name": "Ada", "score": 10},
