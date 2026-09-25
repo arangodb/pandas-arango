@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 project = "pandas-arangodb"
-copyright = "2026, Alexandru Petenchea"
+copyright = "2026, ArangoDB GmbH"
 author = "Alexandru Petenchea"
 release = package_version("pandas-arangodb")
 
