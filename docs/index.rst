@@ -1,7 +1,7 @@
-pandas-arangodb
-===============
+pandas-arango
+=============
 
-``pandas-arangodb`` moves data between ArangoDB documents and pandas
+``pandas-arango`` moves data between ArangoDB documents and pandas
 DataFrames. It provides synchronous, explicit read and write helpers on top of
 the `python-arango`_ driver.
 
@@ -17,7 +17,7 @@ Installation
 
 .. code-block:: console
 
-   python -m pip install pandas-arangodb
+   python -m pip install pandas-arango
 
 Contents
 --------

@@ -1,7 +1,7 @@
 Writing data
 ============
 
-:func:`~pandas_arangodb.write_collection` converts each DataFrame row to one
+:func:`~pandas_arango.write_collection` converts each DataFrame row to one
 ArangoDB document and sends documents in batches.
 
 Insert
@@ -13,7 +13,7 @@ ArangoDB generates keys.
 .. doctest::
 
    >>> import pandas as pd
-   >>> from pandas_arangodb import write_collection
+   >>> from pandas_arango import write_collection
    >>> frame = pd.DataFrame(
    ...     [
    ...         {"_key": "one", "name": "Ada", "city": "London"},

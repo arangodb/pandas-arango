@@ -15,11 +15,11 @@ from arango.exceptions import ServerConnectionError
 @pytest.fixture
 def arango_database() -> Iterator[StandardDatabase]:
     """Provision a throwaway database on the configured local server."""
-    url = os.getenv("PANDAS_ARANGODB_TEST_URL", "http://127.0.0.1:8529")
-    username = os.getenv("PANDAS_ARANGODB_TEST_USERNAME", "root")
-    password = os.getenv("PANDAS_ARANGODB_TEST_PASSWORD", "passwd")
-    require_server = os.getenv("PANDAS_ARANGODB_REQUIRE_SERVER") == "1"
-    database_name = f"pandas_arangodb_test_{uuid4().hex}"
+    url = os.getenv("PANDAS_ARANGO_TEST_URL", "http://127.0.0.1:8529")
+    username = os.getenv("PANDAS_ARANGO_TEST_USERNAME", "root")
+    password = os.getenv("PANDAS_ARANGO_TEST_PASSWORD", "passwd")
+    require_server = os.getenv("PANDAS_ARANGO_REQUIRE_SERVER") == "1"
+    database_name = f"pandas_arango_test_{uuid4().hex}"
 
     client = ArangoClient(hosts=url)
     system_database = client.db(

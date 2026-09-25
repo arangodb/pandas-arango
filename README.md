@@ -1,6 +1,6 @@
-# pandas-arangodb
+# pandas-arango
 
-`pandas-arangodb` is a synchronous connector for moving data between ArangoDB
+`pandas-arango` is a synchronous connector for moving data between ArangoDB
 documents and pandas DataFrames. It supports AQL and collection reads, chunked
 results, and batched insert, update, replace, and upsert operations.
 
@@ -14,7 +14,7 @@ results, and batched insert, update, replace, and upsert operations.
 Install it with:
 
 ```console
-python -m pip install pandas-arangodb
+python -m pip install pandas-arango
 ```
 
 ## Quickstart
@@ -24,7 +24,7 @@ write the result to another collection:
 
 ```python
 from arango import ArangoClient
-from pandas_arangodb import read_collection, write_collection
+from pandas_arango import read_collection, write_collection
 
 client = ArangoClient(hosts="http://127.0.0.1:8529")
 database = client.db("my_database", username="root", password="passwd")
@@ -59,7 +59,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pandas as pd
-from pandas_arangodb import read_aql, write_collection
+from pandas_arango import read_aql, write_collection
 
 measurements = pd.DataFrame(
     [
