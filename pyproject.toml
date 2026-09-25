@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
-    {name= "Alexandru Petenchea", email = "alexandru.petenchea@arangodb.com" },
+    {name= "Alexandru Petenchea", email = "alex.petenchea@gmail.com" },
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
