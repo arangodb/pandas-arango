@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pandas-arangodb"
+name = "pandas-arango"
 version = "0.1.0"
 description = "A connector between ArangoDB and pandas DataFrames"
 readme = "README.md"
